@@ -1,8 +1,8 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
-
-
+import { GoogleAuth } from 'google-auth-library'; 
+import axios from 'axios';
 
 dotenv.config();
 
@@ -43,7 +43,18 @@ const getMeasuresByCustomerCode = async (customerCode: string, measureType?: str
     return measures;
 };
 
-// Endpoint básico para verificar se o servidor está funcionando
+// Função para obter o token de autenticação
+const getAccessToken = async (): Promise<string> => {
+    const auth = new GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/gemini']
+    });
+
+    const authClient = await auth.getClient();
+    const accessToken = await authClient.getAccessToken();
+    return accessToken.token!;
+};
+
+// Endpoint básico pra conferir se o servidor tá funcionando
 app.get('/test', (req: Request, res: Response) => {
     res.send('Endpoint de teste funcionando!');
 });
@@ -60,7 +71,7 @@ app.post('/upload', async (req: Request, res: Response) => {
         });
     }
 
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const currentMonth = new Date().toISOString().slice(0, 7); 
     const existingMeasures = measuresDatabase[customer_code] || [];
     const isDuplicate = existingMeasures.some(measure => 
         measure.measure_type === measure_type && measure.measure_datetime.startsWith(currentMonth)
@@ -73,28 +84,49 @@ app.post('/upload', async (req: Request, res: Response) => {
         });
     }
 
-    // Simular a chamada à API do Gemini e processamento
-    const image_url = 'https://example.com/image'; // URL da imagem temporária
-    const measure_uuid = uuidv4(); // UUID gerado
-    const measure_value = 123; // Valor simulado
+    try {
+        const token = await getAccessToken();
+        
+        // Chamada à API do Google Gemini
+        const geminiResponse = await axios.post('https://gemini.googleapis.com/v1/images:process', {
+            imageData: image, // Tem que substituir de acordo com a estrutura correta exigida pela API
+        }, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'X-API-Key': process.env.GOOGLE_API_KEY // Adicione sua chave API aqui
+            }
+        });
 
-    // Armazenar a nova leitura
-    if (!measuresDatabase[customer_code]) {
-        measuresDatabase[customer_code] = [];
+        const image_url = geminiResponse.data.imageUrl; // Ajuste conforme a resposta da API
+        const measure_value = geminiResponse.data.measureValue; // Ajuste conforme a resposta da API
+        const measure_uuid = uuidv4(); // UUID gerado
+
+        // Armazenar a nova leitura
+        if (!measuresDatabase[customer_code]) {
+            measuresDatabase[customer_code] = [];
+        }
+        measuresDatabase[customer_code].push({
+            measure_uuid,
+            measure_datetime,
+            measure_type,
+            has_confirmed: false,
+            image_url
+        });
+
+        res.status(200).json({
+            image_url,
+            measure_value,
+            measure_uuid
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            error_code: 'INTERNAL_SERVER_ERROR',
+            error_description: 'Erro ao processar a imagem'
+        });
     }
-    measuresDatabase[customer_code].push({
-        measure_uuid,
-        measure_datetime,
-        measure_type,
-        has_confirmed: false,
-        image_url
-    });
-
-    res.status(200).json({
-        image_url,
-        measure_value,
-        measure_uuid
-    });
 });
 
 // Endpoint PATCH /confirm

@@ -15,6 +15,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const uuid_1 = require("uuid");
+const google_auth_library_1 = require("google-auth-library");
+const axios_1 = __importDefault(require("axios"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 app.use(express_1.default.json());
@@ -41,6 +43,15 @@ const getMeasuresByCustomerCode = (customerCode, measureType) => __awaiter(void 
     }
     return measures;
 });
+// Função para obter o token de autenticação
+const getAccessToken = () => __awaiter(void 0, void 0, void 0, function* () {
+    const auth = new google_auth_library_1.GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/gemini']
+    });
+    const authClient = yield auth.getClient();
+    const accessToken = yield authClient.getAccessToken();
+    return accessToken.token;
+});
 // Endpoint básico para verificar se o servidor está funcionando
 app.get('/test', (req, res) => {
     res.send('Endpoint de teste funcionando!');
@@ -55,7 +66,7 @@ app.post('/upload', (req, res) => __awaiter(void 0, void 0, void 0, function* ()
             error_description: 'Dados fornecidos no corpo da requisição são inválidos'
         });
     }
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const currentMonth = new Date().toISOString().slice(0, 7);
     const existingMeasures = measuresDatabase[customer_code] || [];
     const isDuplicate = existingMeasures.some(measure => measure.measure_type === measure_type && measure.measure_datetime.startsWith(currentMonth));
     if (isDuplicate) {
@@ -64,26 +75,45 @@ app.post('/upload', (req, res) => __awaiter(void 0, void 0, void 0, function* ()
             error_description: 'Leitura do mês já realizada'
         });
     }
-    // Simular a chamada à API do Gemini e processamento
-    const image_url = 'https://example.com/image'; // URL da imagem temporária
-    const measure_uuid = (0, uuid_1.v4)(); // UUID gerado
-    const measure_value = 123; // Valor simulado
-    // Armazenar a nova leitura
-    if (!measuresDatabase[customer_code]) {
-        measuresDatabase[customer_code] = [];
+    try {
+        const token = yield getAccessToken();
+        // Chamada à API do Google Gemini
+        const geminiResponse = yield axios_1.default.post('https://gemini.googleapis.com/v1/images:process', {
+            imageData: image, // Substitua conforme a estrutura correta exigida pela API
+        }, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                'X-API-Key': process.env.GOOGLE_API_KEY // Adicione sua chave API aqui
+            }
+        });
+        const image_url = geminiResponse.data.imageUrl; // Ajuste conforme a resposta da API
+        const measure_value = geminiResponse.data.measureValue; // Ajuste conforme a resposta da API
+        const measure_uuid = (0, uuid_1.v4)(); // UUID gerado
+        // Armazenar a nova leitura
+        if (!measuresDatabase[customer_code]) {
+            measuresDatabase[customer_code] = [];
+        }
+        measuresDatabase[customer_code].push({
+            measure_uuid,
+            measure_datetime,
+            measure_type,
+            has_confirmed: false,
+            image_url
+        });
+        res.status(200).json({
+            image_url,
+            measure_value,
+            measure_uuid
+        });
     }
-    measuresDatabase[customer_code].push({
-        measure_uuid,
-        measure_datetime,
-        measure_type,
-        has_confirmed: false,
-        image_url
-    });
-    res.status(200).json({
-        image_url,
-        measure_value,
-        measure_uuid
-    });
+    catch (error) {
+        console.error(error);
+        res.status(500).json({
+            error_code: 'INTERNAL_SERVER_ERROR',
+            error_description: 'Erro ao processar a imagem'
+        });
+    }
 }));
 // Endpoint PATCH /confirm
 app.patch('/confirm', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
